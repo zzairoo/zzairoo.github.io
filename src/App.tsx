@@ -27,7 +27,7 @@ type PlayerTotals = {
   outgoing: number;
 };
 
-type Page = "home" | "users" | "matches";
+type Page = "home" | "users" | "matches" | "leaderboard";
 
 const ROOM_SESSION_KEY = "doekoe.activeRoom.v1";
 const ADMIN_SESSION_KEY = "doekoe.admin.v1";
@@ -243,6 +243,21 @@ function App() {
   const playerNameById = useMemo(() => new Map(data.players.map((player) => [player.id, player.name])), [data.players]);
   const playerById = useMemo(() => new Map(data.players.map((player) => [player.id, player])), [data.players]);
   const { playerTotals, payouts, obliged } = useMemo(() => calculateBalances(data.players, data.matches, data.settlements), [data.players, data.matches, data.settlements]);
+  const leaderboard = useMemo(
+    () =>
+      data.players
+        .map((player) => {
+          const totals = playerTotals.get(player.id) ?? { incoming: 0, outgoing: 0 };
+          return {
+            player,
+            incoming: totals.incoming,
+            outgoing: totals.outgoing,
+            net: roundMoney(totals.incoming - totals.outgoing),
+          };
+        })
+        .sort((a, b) => b.net - a.net),
+    [data.players, playerTotals],
+  );
   const totalInPlay = data.matches.reduce((sum, match) => {
     const matchPayers = match.winnerIds.reduce((count, winnerId) => count + (match.receiveFromByWinner[winnerId]?.length || match.loserIds.length), 0);
     return roundMoney(sum + match.stake * matchPayers);
@@ -565,6 +580,9 @@ function App() {
           <button className={currentPage === "matches" ? "nav-button active" : "nav-button"} type="button" onClick={() => setCurrentPage("matches")} disabled={roomLocked}>
             Matches & payouts
           </button>
+          <button className={currentPage === "leaderboard" ? "nav-button active" : "nav-button"} type="button" onClick={() => setCurrentPage("leaderboard")} disabled={roomLocked}>
+            Leaderboard
+          </button>
           {activePlayerObligedPayouts.length > 0 && (
             <button className="notification-button" type="button" onClick={() => setCurrentPage("matches")} aria-label={`${activePlayerObligedPayouts.length} obliged payment${activePlayerObligedPayouts.length === 1 ? "" : "s"}`}>
               <Bell size={18} />
@@ -810,6 +828,36 @@ function App() {
                 {data.matches.length === 0 ? <div className="empty-state">No matches yet. Add a result to calculate payouts.</div> : data.matches.map((match) => <article className="match-row" key={match.id}><div><strong>{match.winnerIds.map((id) => playerNameById.get(id)).join(", ")}</strong><span>beat {match.loserIds.map((id) => playerNameById.get(id)).join(", ")}</span><small>{currency.format(match.stake)} per payer-to-winner</small></div>{canManage && <button className="icon-button" type="button" onClick={() => void deleteMatch(match.id)} aria-label="Delete match"><Trash2 size={18} /></button>}</article>)}
               </div>
             </section>
+          </div>
+        </section>
+      )}
+
+      {currentPage === "leaderboard" && (
+        <section className="panel page-panel leaderboard-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Leaderboard</p>
+              <h2>Who is up and down</h2>
+              <p className="helper-text">Ranked by current net balance after confirmed payments.</p>
+            </div>
+            <span className="status balanced">{data.players.length} players</span>
+          </div>
+
+          <div className="leaderboard-list">
+            {leaderboard.length === 0 ? (
+              <div className="empty-state">Add players and matches to build the leaderboard.</div>
+            ) : (
+              leaderboard.map((entry, index) => (
+                <article className={entry.net >= 0 ? "leaderboard-row positive-row" : "leaderboard-row negative-row"} key={entry.player.id}>
+                  <span className="leaderboard-rank">#{index + 1}</span>
+                  <div>
+                    <strong>{entry.player.name}</strong>
+                    <span>+{currency.format(entry.incoming)} / -{currency.format(entry.outgoing)}</span>
+                  </div>
+                  <strong className={entry.net >= 0 ? "leaderboard-net positive" : "leaderboard-net negative"}>{entry.net >= 0 ? "+" : "-"}{currency.format(Math.abs(entry.net))}</strong>
+                </article>
+              ))
+            )}
           </div>
         </section>
       )}

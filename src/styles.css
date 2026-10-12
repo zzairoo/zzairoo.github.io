@@ -447,6 +447,58 @@ button:disabled {
   margin-top: 24px;
 }
 
+.leaderboard-list {
+  display: grid;
+  gap: 10px;
+}
+
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.leaderboard-row.positive-row {
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.16), rgba(255, 255, 255, 0.045));
+}
+
+.leaderboard-row.negative-row {
+  background: linear-gradient(90deg, rgba(220, 38, 38, 0.16), rgba(255, 255, 255, 0.045));
+}
+
+.leaderboard-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  color: #050505;
+  background: #f5f5f7;
+  font-weight: 900;
+}
+
+.leaderboard-row div {
+  display: grid;
+  gap: 5px;
+}
+
+.leaderboard-row div span {
+  color: #a1a1aa;
+  font-weight: 700;
+}
+
+.leaderboard-net {
+  font-size: 1.35rem;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
 .left-stack {
   display: grid;
   gap: 24px;
@@ -875,6 +927,14 @@ button:disabled {
 
   .pending-row {
     grid-template-columns: 1fr;
+  }
+
+  .leaderboard-row {
+    grid-template-columns: 1fr;
+  }
+
+  .leaderboard-net {
+    font-size: 1.7rem;
   }
 
   .confirm-button {
