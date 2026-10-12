@@ -182,26 +182,7 @@ function calculateBalances(players: Player[], matches: Match[], settlements: Set
     else pairTotals.delete(key);
   }
 
-  const settledPairs = new Map<string, number>();
-  for (const payout of pairTotals.values()) {
-    const [first, second] = [payout.from, payout.to].sort();
-    const key = `${first}<->${second}`;
-    const signedAmount = payout.from === first ? payout.amount : -payout.amount;
-    settledPairs.set(key, roundMoney((settledPairs.get(key) ?? 0) + signedAmount));
-  }
-
-  const payouts = [...settledPairs.entries()]
-    .flatMap(([key, amount]) => {
-      if (amount === 0) return [];
-      const [first, second] = key.split("<->");
-      return [
-        {
-          from: amount > 0 ? first : second,
-          to: amount > 0 ? second : first,
-          amount: Math.abs(amount),
-        },
-      ];
-    })
+  const payouts = [...pairTotals.values()]
     .filter((payout) => payout.amount > 0)
     .sort((a, b) => b.amount - a.amount);
 
