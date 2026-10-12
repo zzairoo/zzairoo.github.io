@@ -53,6 +53,17 @@ create index if not exists players_room_slug_idx on public.players(room_slug) wh
 create index if not exists matches_room_slug_idx on public.matches(room_slug) where deleted_at is null;
 create index if not exists settlements_room_slug_idx on public.settlements(room_slug);
 
+delete from public.settlements s
+using public.settlements newer
+where s.status = 'marked_paid'
+  and newer.status = 'marked_paid'
+  and s.room_slug = newer.room_slug
+  and s.from_player_id = newer.from_player_id
+  and s.to_player_id = newer.to_player_id
+  and (newer.created_at, newer.id) > (s.created_at, s.id);
+
+create unique index if not exists settlements_pending_pair_idx on public.settlements(room_slug, from_player_id, to_player_id) where status = 'marked_paid';
+
 insert into public.players (id, room_slug, name)
 select (player->>'id')::uuid, rooms.slug, player->>'name'
 from public.rooms
@@ -88,6 +99,9 @@ drop function if exists public.save_room_data(text, text, jsonb);
 drop function if exists public.upsert_player(text, text, uuid, text, text, text, text);
 drop function if exists public.delete_player(text, text, uuid);
 drop function if exists public.delete_match_result(text, text, uuid);
+drop function if exists public.add_match_result(text, text, numeric, uuid[], uuid[], jsonb);
+drop function if exists public.cancel_settlement_paid(text, text, uuid);
+drop function if exists public.confirm_settlement_received(text, text, uuid, uuid);
 
 create or replace function public.room_state(p_slug text)
 returns jsonb
@@ -246,7 +260,7 @@ begin
 end;
 $$;
 
-create or replace function public.add_match_result(p_slug text, p_password_hash text, p_stake numeric, p_winner_ids uuid[], p_loser_ids uuid[], p_receive_from_by_winner jsonb)
+create or replace function public.add_match_result(p_slug text, p_password_hash text, p_match_id uuid, p_stake numeric, p_winner_ids uuid[], p_loser_ids uuid[], p_receive_from_by_winner jsonb)
 returns jsonb
 language plpgsql
 security definer
@@ -256,8 +270,14 @@ begin
   perform 1 from public.rooms where slug = p_slug and password_hash = p_password_hash;
   if not found then raise exception 'Room not found or wrong password'; end if;
 
-  insert into public.matches (room_slug, stake, winner_ids, loser_ids, receive_from_by_winner)
-  values (p_slug, p_stake, p_winner_ids, p_loser_ids, coalesce(p_receive_from_by_winner, '{}'::jsonb));
+  insert into public.matches (id, room_slug, stake, winner_ids, loser_ids, receive_from_by_winner)
+  values (p_match_id, p_slug, p_stake, p_winner_ids, p_loser_ids, coalesce(p_receive_from_by_winner, '{}'::jsonb))
+  on conflict (id) do update
+  set stake = excluded.stake,
+      winner_ids = excluded.winner_ids,
+      loser_ids = excluded.loser_ids,
+      receive_from_by_winner = excluded.receive_from_by_winner,
+      deleted_at = null;
 
   return public.room_state(p_slug);
 end;
@@ -289,41 +309,68 @@ begin
   perform 1 from public.rooms where slug = p_slug and password_hash = p_password_hash;
   if not found then raise exception 'Room not found or wrong password'; end if;
 
+  if p_from_player_id = p_to_player_id then raise exception 'Cannot mark a payment to yourself'; end if;
+
   insert into public.settlements (room_slug, from_player_id, to_player_id, amount, status, marked_by_player_id)
-  values (p_slug, p_from_player_id, p_to_player_id, p_amount, 'marked_paid', p_from_player_id);
+  values (p_slug, p_from_player_id, p_to_player_id, p_amount, 'marked_paid', p_from_player_id)
+  on conflict (room_slug, from_player_id, to_player_id) where status = 'marked_paid'
+  do update set amount = excluded.amount,
+                marked_by_player_id = excluded.marked_by_player_id,
+                created_at = now();
 
   return public.room_state(p_slug);
 end;
 $$;
 
-create or replace function public.cancel_settlement_paid(p_slug text, p_password_hash text, p_settlement_id uuid)
+create or replace function public.cancel_settlement_paid(p_slug text, p_password_hash text, p_settlement_id uuid, p_actor_player_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  settlement_record public.settlements%rowtype;
 begin
   perform 1 from public.rooms where slug = p_slug and password_hash = p_password_hash;
   if not found then raise exception 'Room not found or wrong password'; end if;
+
+  select * into settlement_record
+  from public.settlements
+  where id = p_settlement_id and room_slug = p_slug and status = 'marked_paid';
+
+  if not found then raise exception 'Pending payment not found'; end if;
+  if p_actor_player_id <> settlement_record.from_player_id then raise exception 'Only the payer can mark this payment unpaid'; end if;
 
   delete from public.settlements
-  where id = p_settlement_id
-    and room_slug = p_slug
-    and status = 'marked_paid';
+  where id = p_settlement_id;
 
   return public.room_state(p_slug);
 end;
 $$;
 
-create or replace function public.confirm_settlement_received(p_slug text, p_password_hash text, p_settlement_id uuid, p_confirmer_player_id uuid)
+create or replace function public.confirm_settlement_received(p_slug text, p_password_hash text, p_admin_hash text, p_settlement_id uuid, p_confirmer_player_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  settlement_record public.settlements%rowtype;
 begin
   perform 1 from public.rooms where slug = p_slug and password_hash = p_password_hash;
   if not found then raise exception 'Room not found or wrong password'; end if;
+
+  select * into settlement_record
+  from public.settlements
+  where id = p_settlement_id and room_slug = p_slug;
+
+  if not found then raise exception 'Settlement not found'; end if;
+  if p_confirmer_player_id = settlement_record.from_player_id then raise exception 'Payer cannot confirm their own payment'; end if;
+  if p_confirmer_player_id is null then
+    perform public.ensure_admin(p_slug, p_password_hash, p_admin_hash);
+  elsif p_confirmer_player_id <> settlement_record.to_player_id then
+    raise exception 'Only the receiver can confirm this payment';
+  end if;
 
   update public.settlements
   set status = 'confirmed_received',
@@ -341,10 +388,10 @@ grant execute on function public.login_player(text, text, uuid, text) to anon, a
 grant execute on function public.ensure_admin(text, text, text) to anon, authenticated;
 grant execute on function public.upsert_player(text, text, text, uuid, text, text, text, text) to anon, authenticated;
 grant execute on function public.delete_player(text, text, text, uuid) to anon, authenticated;
-grant execute on function public.add_match_result(text, text, numeric, uuid[], uuid[], jsonb) to anon, authenticated;
+grant execute on function public.add_match_result(text, text, uuid, numeric, uuid[], uuid[], jsonb) to anon, authenticated;
 grant execute on function public.delete_match_result(text, text, text, uuid) to anon, authenticated;
 grant execute on function public.mark_settlement_paid(text, text, uuid, uuid, numeric) to anon, authenticated;
-grant execute on function public.cancel_settlement_paid(text, text, uuid) to anon, authenticated;
-grant execute on function public.confirm_settlement_received(text, text, uuid, uuid) to anon, authenticated;
+grant execute on function public.cancel_settlement_paid(text, text, uuid, uuid) to anon, authenticated;
+grant execute on function public.confirm_settlement_received(text, text, text, uuid, uuid) to anon, authenticated;
 
 notify pgrst, 'reload schema';

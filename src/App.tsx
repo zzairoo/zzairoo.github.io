@@ -550,6 +550,7 @@ function App() {
     try {
       const remoteData = normalizeData(
         await addMatchResult(activeRoom.slug, activeRoom.passwordHash, {
+          id: optimisticMatch.id,
           stake: optimisticMatch.stake,
           winnerIds: optimisticMatch.winnerIds,
           loserIds: optimisticMatch.loserIds,
@@ -590,13 +591,14 @@ function App() {
   }
 
   async function markUnpaid(settlement: Settlement) {
-    if (!canManage && activePlayerId !== settlement.from) return;
-    await withRoomMutation((room) => cancelSettlementPaid(room.slug, room.passwordHash, settlement.id));
+    if (activePlayerId !== settlement.from) return;
+    await withRoomMutation((room) => cancelSettlementPaid(room.slug, room.passwordHash, settlement.id, activePlayerId));
   }
 
   async function confirmReceived(settlement: Settlement) {
+    if (activePlayerId === settlement.from) return;
     if (!canManage && activePlayerId !== settlement.to) return;
-    await withRoomMutation((room) => confirmSettlementReceived(room.slug, room.passwordHash, settlement.id, activePlayerId || null));
+    await withRoomMutation((room) => confirmSettlementReceived(room.slug, room.passwordHash, adminHash, settlement.id, activePlayerId === settlement.to ? activePlayerId : null));
   }
 
   return (
@@ -851,7 +853,7 @@ function App() {
                 {pendingSettlements.length === 0 ? <div className="empty-state">No payments are waiting for confirmation.</div> : pendingSettlements.map((settlement) => (
                   <article className="pending-row" key={settlement.id}>
                     <div><strong>{playerNameById.get(settlement.from)} marked {currency.format(settlement.amount)} as paid</strong><span>to {playerNameById.get(settlement.to)}</span></div>
-                    <button className="confirm-button" type="button" onClick={() => void confirmReceived(settlement)} disabled={!canManage && activePlayerId !== settlement.to}>Confirm payment</button>
+                    <button className="confirm-button" type="button" onClick={() => void confirmReceived(settlement)} disabled={activePlayerId === settlement.from || (!canManage && activePlayerId !== settlement.to)}>Confirm payment</button>
                   </article>
                 ))}
               </div>

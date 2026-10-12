@@ -95,17 +95,31 @@ export async function deletePlayer(slug: string, passwordHash: string, adminHash
   return data as AppData;
 }
 
-export async function addMatchResult(slug: string, passwordHash: string, match: { stake: number; winnerIds: string[]; loserIds: string[]; receiveFromByWinner: Record<string, string[]> }) {
+export async function addMatchResult(slug: string, passwordHash: string, match: { id: string; stake: number; winnerIds: string[]; loserIds: string[]; receiveFromByWinner: Record<string, string[]> }) {
   if (!supabase) throw new Error("Supabase is not configured yet.");
 
-  const { data, error } = await supabase.rpc("add_match_result", {
+  let { data, error } = await supabase.rpc("add_match_result", {
     p_slug: slug,
     p_password_hash: passwordHash,
+    p_match_id: match.id,
     p_stake: match.stake,
     p_winner_ids: match.winnerIds,
     p_loser_ids: match.loserIds,
     p_receive_from_by_winner: match.receiveFromByWinner,
   });
+
+  if (isMissingRpcSignature(error)) {
+    const legacyResult = await supabase.rpc("add_match_result", {
+      p_slug: slug,
+      p_password_hash: passwordHash,
+      p_stake: match.stake,
+      p_winner_ids: match.winnerIds,
+      p_loser_ids: match.loserIds,
+      p_receive_from_by_winner: match.receiveFromByWinner,
+    });
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return data as AppData;
@@ -150,28 +164,51 @@ export async function markSettlementPaid(slug: string, passwordHash: string, fro
   return data as AppData;
 }
 
-export async function cancelSettlementPaid(slug: string, passwordHash: string, settlementId: string) {
+export async function cancelSettlementPaid(slug: string, passwordHash: string, settlementId: string, actorPlayerId: string) {
   if (!supabase) throw new Error("Supabase is not configured yet.");
 
-  const { data, error } = await supabase.rpc("cancel_settlement_paid", {
+  let { data, error } = await supabase.rpc("cancel_settlement_paid", {
     p_slug: slug,
     p_password_hash: passwordHash,
     p_settlement_id: settlementId,
+    p_actor_player_id: actorPlayerId,
   });
+
+  if (isMissingRpcSignature(error)) {
+    const legacyResult = await supabase.rpc("cancel_settlement_paid", {
+      p_slug: slug,
+      p_password_hash: passwordHash,
+      p_settlement_id: settlementId,
+    });
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return data as AppData;
 }
 
-export async function confirmSettlementReceived(slug: string, passwordHash: string, settlementId: string, confirmerPlayerId: string | null) {
+export async function confirmSettlementReceived(slug: string, passwordHash: string, adminHash: string, settlementId: string, confirmerPlayerId: string | null) {
   if (!supabase) throw new Error("Supabase is not configured yet.");
 
-  const { data, error } = await supabase.rpc("confirm_settlement_received", {
+  let { data, error } = await supabase.rpc("confirm_settlement_received", {
     p_slug: slug,
     p_password_hash: passwordHash,
+    p_admin_hash: adminHash,
     p_settlement_id: settlementId,
     p_confirmer_player_id: confirmerPlayerId,
   });
+
+  if (isMissingRpcSignature(error)) {
+    const legacyResult = await supabase.rpc("confirm_settlement_received", {
+      p_slug: slug,
+      p_password_hash: passwordHash,
+      p_settlement_id: settlementId,
+      p_confirmer_player_id: confirmerPlayerId,
+    });
+    data = legacyResult.data;
+    error = legacyResult.error;
+  }
 
   if (error) throw error;
   return data as AppData;
