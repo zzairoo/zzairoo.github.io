@@ -59,6 +59,14 @@ function slugifyRoomName(value: string) {
 
 function normalizeStringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch {
+      return [];
+    }
+  }
   if (typeof value === "string" && value.startsWith("{") && value.endsWith("}")) {
     return value.slice(1, -1).split(",").map((item) => item.trim()).filter(Boolean);
   }
@@ -66,6 +74,13 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 function normalizeReceiveMap(value: unknown): Record<string, string[]> {
+  if (typeof value === "string") {
+    try {
+      return normalizeReceiveMap(JSON.parse(value) as unknown);
+    } catch {
+      return {};
+    }
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([winnerId, payerIds]) => [winnerId, normalizeStringArray(payerIds)]));
 }
@@ -96,6 +111,25 @@ function normalizeData(value: AppData | null | undefined): AppData {
       amount: Number(settlement.amount),
       createdAt: Number(settlement.createdAt),
     })),
+  };
+}
+
+function mergeRoomData(current: AppData, incoming: AppData): AppData {
+  const currentMatchById = new Map(current.matches.map((match) => [match.id, match]));
+
+  return {
+    ...incoming,
+    matches: incoming.matches.map((match) => {
+      const currentMatch = currentMatchById.get(match.id);
+      if (!currentMatch) return match;
+
+      return {
+        ...match,
+        winnerIds: match.winnerIds.length ? match.winnerIds : currentMatch.winnerIds,
+        loserIds: match.loserIds.length ? match.loserIds : currentMatch.loserIds,
+        receiveFromByWinner: Object.keys(match.receiveFromByWinner).length ? match.receiveFromByWinner : currentMatch.receiveFromByWinner,
+      };
+    }),
   };
 }
 
@@ -299,7 +333,7 @@ function App() {
       try {
         const remoteData = normalizeData(await joinRoom(room.slug, room.passwordHash));
         if (cancelled) return;
-        setData(remoteData);
+        setData((current) => mergeRoomData(current, remoteData));
         setSyncStatus("Room synced");
       } catch (error) {
         if (cancelled) return;
@@ -322,7 +356,8 @@ function App() {
     setRoomError("");
     setSyncStatus("Saving...");
     try {
-      setData(normalizeData(await action(activeRoom)));
+      const remoteData = normalizeData(await action(activeRoom));
+      setData((current) => mergeRoomData(current, remoteData));
       setSyncStatus("Saved");
     } catch (error) {
       setRoomError(error instanceof Error ? error.message : "Could not save");
@@ -521,7 +556,7 @@ function App() {
           receiveFromByWinner: optimisticMatch.receiveFromByWinner,
         }),
       );
-      setData((current) => (remoteData.matches.length >= current.matches.length ? remoteData : current));
+      setData((current) => (remoteData.matches.length >= current.matches.length ? mergeRoomData(current, remoteData) : current));
       setSyncStatus("Saved");
     } catch (error) {
       setData((current) => ({ ...current, matches: current.matches.filter((match) => match.id !== optimisticMatch.id) }));
