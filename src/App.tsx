@@ -152,8 +152,27 @@ function buildPaymentDetails(receiver: Player, payerName: string, amount: number
 function calculateBalances(players: Player[], matches: Match[], settlements: Settlement[]) {
   const playerIds = new Set(players.map((player) => player.id));
   const pairTotals = new Map<string, Payout>();
+  const events = [
+    ...matches.map((match) => ({ type: "match" as const, createdAt: match.createdAt, match })),
+    ...settlements
+      .filter((settlement) => settlement.status === "confirmed_received")
+      .map((settlement) => ({ type: "settlement" as const, createdAt: settlement.confirmedAt ?? settlement.createdAt, settlement })),
+  ].sort((a, b) => a.createdAt - b.createdAt);
 
-  for (const match of matches) {
+  for (const event of events) {
+    if (event.type === "settlement") {
+      const settlement = event.settlement;
+      const key = `${settlement.from}->${settlement.to}`;
+      const existing = pairTotals.get(key);
+      if (!existing) continue;
+
+      const nextAmount = roundMoney(existing.amount - settlement.amount);
+      if (nextAmount > 0) pairTotals.set(key, { ...existing, amount: nextAmount });
+      else pairTotals.delete(key);
+      continue;
+    }
+
+    const match = event.match;
     for (const winnerId of match.winnerIds) {
       const payers = match.receiveFromByWinner[winnerId]?.length ? match.receiveFromByWinner[winnerId] : match.loserIds;
 
@@ -169,17 +188,6 @@ function calculateBalances(players: Player[], matches: Match[], settlements: Set
         });
       }
     }
-  }
-
-  for (const settlement of settlements) {
-    if (settlement.status !== "confirmed_received") continue;
-    const key = `${settlement.from}->${settlement.to}`;
-    const existing = pairTotals.get(key);
-    if (!existing) continue;
-
-    const nextAmount = roundMoney(existing.amount - settlement.amount);
-    if (nextAmount > 0) pairTotals.set(key, { ...existing, amount: nextAmount });
-    else pairTotals.delete(key);
   }
 
   const payouts = [...pairTotals.values()]
