@@ -15,4 +15,6 @@ export type Match = {
 export type AppData = {
   players: Player[];
   matches: Match[];
+  deletedPlayerIds?: string[];
+  deletedMatchIds?: string[];
 };

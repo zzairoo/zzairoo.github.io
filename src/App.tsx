@@ -20,7 +20,7 @@ const ROOM_SESSION_KEY = "doekoe.activeRoom.v1";
 const ADMIN_SESSION_KEY = "doekoe.admin.v1";
 const MIN_PAYOUT = 10;
 const ADMIN_CODE = import.meta.env.VITE_ADMIN_CODE?.trim() ?? "";
-const EMPTY_DATA: AppData = { players: [], matches: [] };
+const EMPTY_DATA: AppData = { players: [], matches: [], deletedPlayerIds: [], deletedMatchIds: [] };
 
 const currency = new Intl.NumberFormat("nl-NL", {
   style: "currency",
@@ -41,6 +41,19 @@ function toggleSelected(list: string[], id: string) {
 
 function slugifyRoomName(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function normalizeData(value: AppData | null | undefined): AppData {
+  return {
+    players: value?.players ?? [],
+    matches: value?.matches ?? [],
+    deletedPlayerIds: value?.deletedPlayerIds ?? [],
+    deletedMatchIds: value?.deletedMatchIds ?? [],
+  };
+}
+
+function roomKey(room: { slug: string; passwordHash: string } | null) {
+  return room ? `${room.slug}:${room.passwordHash}` : "";
 }
 
 async function hashPassword(value: string) {
@@ -114,7 +127,7 @@ function App() {
   const [data, setData] = useState<AppData>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? (JSON.parse(saved) as AppData) : EMPTY_DATA;
+      return saved ? normalizeData(JSON.parse(saved) as AppData) : EMPTY_DATA;
     } catch {
       return EMPTY_DATA;
     }
@@ -133,6 +146,9 @@ function App() {
   const [syncStatus, setSyncStatus] = useState(isSupabaseConfigured ? "Local until you join a room" : "Add Supabase env vars to enable shared rooms");
   const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const skipNextSaveRef = useRef(false);
+  const hasLocalChangesRef = useRef(false);
+  const isSavingRef = useRef(false);
+  const [syncedRoomKey, setSyncedRoomKey] = useState("");
   const [adminCode, setAdminCode] = useState("");
   const [isAdmin, setIsAdmin] = useState(() => localStorage.getItem(ADMIN_SESSION_KEY) === "true");
   const [adminError, setAdminError] = useState("");
@@ -142,13 +158,21 @@ function App() {
   const [loserIds, setLoserIds] = useState<string[]>([]);
   const [receiveFromByWinner, setReceiveFromByWinner] = useState<Record<string, string[]>>({});
 
+  const activeRoomKey = roomKey(activeRoom);
+
+  function updateData(updater: (current: AppData) => AppData) {
+    hasLocalChangesRef.current = true;
+    setData((current) => normalizeData(updater(normalizeData(current))));
+  }
+
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeData(data)));
   }, [data]);
 
   useEffect(() => {
     if (!activeRoom) {
       localStorage.removeItem(ROOM_SESSION_KEY);
+      setSyncedRoomKey("");
       return;
     }
 
@@ -162,12 +186,15 @@ function App() {
     const room = activeRoom;
 
     async function loadActiveRoom() {
+      if (hasLocalChangesRef.current || isSavingRef.current) return;
+
       try {
         setSyncStatus("Loading shared room...");
         const remoteData = await joinRoom(room.slug, room.passwordHash);
         if (cancelled) return;
         skipNextSaveRef.current = true;
-        setData(remoteData ?? EMPTY_DATA);
+        setData(normalizeData(remoteData));
+        setSyncedRoomKey(roomKey(room));
         setSyncStatus("Shared room connected");
       } catch (error) {
         if (cancelled) return;
@@ -186,7 +213,7 @@ function App() {
   }, [activeRoom]);
 
   useEffect(() => {
-    if (!activeRoom || !isSupabaseConfigured) return;
+    if (!activeRoom || !isSupabaseConfigured || syncedRoomKey !== activeRoomKey) return;
 
     if (skipNextSaveRef.current) {
       skipNextSaveRef.current = false;
@@ -196,16 +223,20 @@ function App() {
     const timeoutId = window.setTimeout(async () => {
       try {
         setSyncStatus("Saving shared room...");
-        await saveRoom(activeRoom.slug, activeRoom.passwordHash, data);
+        isSavingRef.current = true;
+        await saveRoom(activeRoom.slug, activeRoom.passwordHash, normalizeData(data));
+        hasLocalChangesRef.current = false;
         setSyncStatus("Saved to shared room");
       } catch (error) {
         setRoomError(error instanceof Error ? error.message : "Could not save room");
         setSyncStatus("Room save failed");
+      } finally {
+        isSavingRef.current = false;
       }
     }, 450);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeRoom, data]);
+  }, [activeRoom, activeRoomKey, data, syncedRoomKey]);
 
   const canManage = isAdmin && ADMIN_CODE.length > 0;
   const playerNameById = useMemo(() => new Map(data.players.map((player) => [player.id, player.name])), [data.players]);
@@ -265,8 +296,9 @@ function App() {
       const passwordHash = await hashPassword(`${slug}:${roomPassword}`);
       const remoteData = await joinRoom(slug, passwordHash);
       skipNextSaveRef.current = true;
-      setData(remoteData ?? EMPTY_DATA);
+      setData(normalizeData(remoteData));
       setActiveRoom({ slug, passwordHash });
+      setSyncedRoomKey(roomKey({ slug, passwordHash }));
       setRoomName("");
       setRoomPassword("");
       setSyncStatus("Shared room connected");
@@ -280,6 +312,7 @@ function App() {
 
   function leaveRoom() {
     setActiveRoom(null);
+    setSyncedRoomKey("");
     setRoomError("");
     setSyncStatus(isSupabaseConfigured ? "Local until you join a room" : "Add Supabase env vars to enable shared rooms");
   }
@@ -290,28 +323,34 @@ function App() {
     const name = newPlayerName.trim();
     if (!name) return;
 
-    setData((current) => ({ ...current, players: [...current.players, { id: createId(), name }] }));
+    updateData((current) => ({ ...current, players: [...current.players, { id: createId(), name }] }));
     setNewPlayerName("");
   }
 
   function removePlayer(id: string) {
     if (!canManage) return;
 
-    setData((current) => ({
-      players: current.players.filter((player) => player.id !== id),
-      matches: current.matches
-        .map((match) => ({
-          ...match,
-          winnerIds: match.winnerIds.filter((winnerId) => winnerId !== id),
-          loserIds: match.loserIds.filter((loserId) => loserId !== id),
-          receiveFromByWinner: Object.fromEntries(
-            Object.entries(match.receiveFromByWinner)
-              .filter(([winnerId]) => winnerId !== id)
-              .map(([winnerId, payerIds]) => [winnerId, payerIds.filter((payerId) => payerId !== id)]),
-          ),
-        }))
-        .filter((match) => match.winnerIds.length > 0 && match.loserIds.length > 0),
-    }));
+    updateData((current) => {
+      const updatedMatches = current.matches.map((match) => ({
+        ...match,
+        winnerIds: match.winnerIds.filter((winnerId) => winnerId !== id),
+        loserIds: match.loserIds.filter((loserId) => loserId !== id),
+        receiveFromByWinner: Object.fromEntries(
+          Object.entries(match.receiveFromByWinner)
+            .filter(([winnerId]) => winnerId !== id)
+            .map(([winnerId, payerIds]) => [winnerId, payerIds.filter((payerId) => payerId !== id)]),
+        ),
+      }));
+      const remainingMatches = updatedMatches.filter((match) => match.winnerIds.length > 0 && match.loserIds.length > 0);
+      const removedMatchIds = updatedMatches.filter((match) => match.winnerIds.length === 0 || match.loserIds.length === 0).map((match) => match.id);
+
+      return {
+        players: current.players.filter((player) => player.id !== id),
+        matches: remainingMatches,
+        deletedPlayerIds: [...new Set([...(current.deletedPlayerIds ?? []), id])],
+        deletedMatchIds: [...new Set([...(current.deletedMatchIds ?? []), ...removedMatchIds])],
+      };
+    });
     setWinnerIds((current) => current.filter((playerId) => playerId !== id));
     setLoserIds((current) => current.filter((playerId) => playerId !== id));
     setReceiveFromByWinner((current) =>
@@ -326,7 +365,7 @@ function App() {
   function updatePlayer(id: string, name: string) {
     if (!canManage) return;
 
-    setData((current) => ({ ...current, players: current.players.map((player) => (player.id === id ? { ...player, name } : player)) }));
+    updateData((current) => ({ ...current, players: current.players.map((player) => (player.id === id ? { ...player, name } : player)) }));
   }
 
   function toggleWinner(id: string) {
@@ -357,7 +396,7 @@ function App() {
       }),
     );
 
-    setData((current) => ({
+    updateData((current) => ({
       ...current,
       matches: [
         {
@@ -379,7 +418,11 @@ function App() {
   function deleteMatch(id: string) {
     if (!canManage) return;
 
-    setData((current) => ({ ...current, matches: current.matches.filter((match) => match.id !== id) }));
+    updateData((current) => ({
+      ...current,
+      matches: current.matches.filter((match) => match.id !== id),
+      deletedMatchIds: [...new Set([...(current.deletedMatchIds ?? []), id])],
+    }));
   }
 
   return (

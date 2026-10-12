@@ -41,7 +41,52 @@ set search_path = public
 as $$
 begin
   update public.rooms
-  set data = p_data,
+  set data = jsonb_build_object(
+        'players', coalesce((
+          select jsonb_agg(player order by lower(player->>'name'))
+          from (
+            select distinct on (id) id, player
+            from (
+              select item->>'id' as id, item as player, 1 as priority
+              from jsonb_array_elements(coalesce(public.rooms.data->'players', '[]'::jsonb)) as item
+              union all
+              select item->>'id' as id, item as player, 2 as priority
+              from jsonb_array_elements(coalesce(p_data->'players', '[]'::jsonb)) as item
+            ) merged_players
+            where id is not null
+              and not (id in (
+                select jsonb_array_elements_text(coalesce(public.rooms.data->'deletedPlayerIds', '[]'::jsonb) || coalesce(p_data->'deletedPlayerIds', '[]'::jsonb))
+              ))
+            order by id, priority desc
+          ) deduped_players
+        ), '[]'::jsonb),
+        'matches', coalesce((
+          select jsonb_agg(match order by ((match->>'createdAt')::bigint) desc)
+          from (
+            select distinct on (id) id, match
+            from (
+              select item->>'id' as id, item as match, 1 as priority
+              from jsonb_array_elements(coalesce(public.rooms.data->'matches', '[]'::jsonb)) as item
+              union all
+              select item->>'id' as id, item as match, 2 as priority
+              from jsonb_array_elements(coalesce(p_data->'matches', '[]'::jsonb)) as item
+            ) merged_matches
+            where id is not null
+              and not (id in (
+                select jsonb_array_elements_text(coalesce(public.rooms.data->'deletedMatchIds', '[]'::jsonb) || coalesce(p_data->'deletedMatchIds', '[]'::jsonb))
+              ))
+            order by id, priority desc
+          ) deduped_matches
+        ), '[]'::jsonb),
+        'deletedPlayerIds', coalesce((
+          select jsonb_agg(distinct deleted_id)
+          from jsonb_array_elements_text(coalesce(public.rooms.data->'deletedPlayerIds', '[]'::jsonb) || coalesce(p_data->'deletedPlayerIds', '[]'::jsonb)) as deleted_id
+        ), '[]'::jsonb),
+        'deletedMatchIds', coalesce((
+          select jsonb_agg(distinct deleted_id)
+          from jsonb_array_elements_text(coalesce(public.rooms.data->'deletedMatchIds', '[]'::jsonb) || coalesce(p_data->'deletedMatchIds', '[]'::jsonb)) as deleted_id
+        ), '[]'::jsonb)
+      ),
       updated_at = now()
   where slug = p_slug
     and password_hash = p_password_hash;
