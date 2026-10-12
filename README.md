@@ -18,6 +18,8 @@ The app stores players and match results in `localStorage` by default. If Supaba
 
 Advanced mode calculates payouts from matches: choose winners, losers, the stake, and who each winner receives from.
 
+Set `VITE_PAYMENT_REQUEST_URL_TEMPLATE` to enable copyable iDEAL/payment request links on the payouts page. Supported placeholders are `{amount}`, `{description}`, `{payer}`, and `{receiver}`.
+
 ## Supabase setup
 
 1. Create a Supabase project.
