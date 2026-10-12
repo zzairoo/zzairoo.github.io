@@ -18,7 +18,7 @@ The app stores players and match results in `localStorage` by default. If Supaba
 
 Advanced mode calculates payouts from matches: choose winners, losers, the stake, and who each winner receives from.
 
-Set `VITE_PAYMENT_REQUEST_URL_TEMPLATE` to enable copyable iDEAL/payment request links on the payouts page. Supported placeholders are `{amount}`, `{description}`, `{payer}`, and `{receiver}`.
+Players can store their own IBAN and account holder name. The payouts page generates SEPA bank transfer QR codes in the browser, plus copyable payment details, so payment requests do not need an iDEAL provider or transaction fees.
 
 ## Supabase setup
 
@@ -29,4 +29,4 @@ Set `VITE_PAYMENT_REQUEST_URL_TEMPLATE` to enable copyable iDEAL/payment request
 5. Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from Supabase project settings.
 6. Restart `npm run dev`.
 
-The room password is hashed in the browser before being sent to Supabase. The database table is not directly readable by the anonymous key; access goes through the `join_room` and `save_room_data` functions.
+The room password and player PINs are hashed in the browser before being sent to Supabase. Tables are not directly readable by the anonymous key; access goes through security-definer RPC functions in `supabase-schema.sql`.
