@@ -102,6 +102,7 @@ drop function if exists public.delete_match_result(text, text, uuid);
 drop function if exists public.add_match_result(text, text, numeric, uuid[], uuid[], jsonb);
 drop function if exists public.cancel_settlement_paid(text, text, uuid);
 drop function if exists public.confirm_settlement_received(text, text, uuid, uuid);
+drop function if exists public.reset_leaderboard(text, text, text);
 
 create or replace function public.room_state(p_slug text)
 returns jsonb
@@ -382,6 +383,22 @@ begin
 end;
 $$;
 
+create or replace function public.reset_leaderboard(p_slug text, p_password_hash text, p_admin_hash text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.ensure_admin(p_slug, p_password_hash, p_admin_hash);
+
+  delete from public.settlements
+  where room_slug = p_slug and status = 'confirmed_received';
+
+  return public.room_state(p_slug);
+end;
+$$;
+
 grant execute on function public.room_state(text) to anon, authenticated;
 grant execute on function public.join_room(text, text) to anon, authenticated;
 grant execute on function public.login_player(text, text, uuid, text) to anon, authenticated;
@@ -393,5 +410,6 @@ grant execute on function public.delete_match_result(text, text, text, uuid) to 
 grant execute on function public.mark_settlement_paid(text, text, uuid, uuid, numeric) to anon, authenticated;
 grant execute on function public.cancel_settlement_paid(text, text, uuid, uuid) to anon, authenticated;
 grant execute on function public.confirm_settlement_received(text, text, text, uuid, uuid) to anon, authenticated;
+grant execute on function public.reset_leaderboard(text, text, text) to anon, authenticated;
 
 notify pgrst, 'reload schema';

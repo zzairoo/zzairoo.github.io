@@ -213,3 +213,16 @@ export async function confirmSettlementReceived(slug: string, passwordHash: stri
   if (error) throw error;
   return data as AppData;
 }
+
+export async function resetLeaderboard(slug: string, passwordHash: string, adminHash: string) {
+  if (!supabase) throw new Error("Supabase is not configured yet.");
+
+  const { data, error } = await supabase.rpc("reset_leaderboard", {
+    p_slug: slug,
+    p_password_hash: passwordHash,
+    p_admin_hash: adminHash,
+  });
+
+  if (error) throw error;
+  return data as AppData;
+}

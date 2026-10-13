@@ -12,6 +12,7 @@ import {
   joinRoom,
   loginPlayer,
   markSettlementPaid,
+  resetLeaderboard,
   upsertPlayer,
 } from "./supabase";
 import type { AppData, Match, Player, Settlement } from "./types";
@@ -209,6 +210,21 @@ function calculateBalances(players: Player[], matches: Match[], settlements: Set
   };
 }
 
+function calculateConfirmedPaymentTotals(players: Player[], settlements: Settlement[]) {
+  const playerTotals = new Map<string, PlayerTotals>(players.map((player) => [player.id, { incoming: 0, outgoing: 0 }]));
+
+  for (const settlement of settlements) {
+    if (settlement.status !== "confirmed_received") continue;
+
+    const receiver = playerTotals.get(settlement.to);
+    const payer = playerTotals.get(settlement.from);
+    if (receiver) receiver.incoming = roundMoney(receiver.incoming + settlement.amount);
+    if (payer) payer.outgoing = roundMoney(payer.outgoing + settlement.amount);
+  }
+
+  return playerTotals;
+}
+
 function PaymentQr({ value }: { value: string }) {
   const [src, setSrc] = useState("");
 
@@ -266,11 +282,12 @@ function App() {
   const playerNameById = useMemo(() => new Map(data.players.map((player) => [player.id, player.name])), [data.players]);
   const playerById = useMemo(() => new Map(data.players.map((player) => [player.id, player])), [data.players]);
   const { playerTotals, payouts, obliged } = useMemo(() => calculateBalances(data.players, data.matches, data.settlements), [data.players, data.matches, data.settlements]);
+  const leaderboardTotals = useMemo(() => calculateConfirmedPaymentTotals(data.players, data.settlements), [data.players, data.settlements]);
   const leaderboard = useMemo(
     () =>
       data.players
         .map((player) => {
-          const totals = playerTotals.get(player.id) ?? { incoming: 0, outgoing: 0 };
+          const totals = leaderboardTotals.get(player.id) ?? { incoming: 0, outgoing: 0 };
           return {
             player,
             incoming: totals.incoming,
@@ -279,7 +296,7 @@ function App() {
           };
         })
         .sort((a, b) => b.net - a.net),
-    [data.players, playerTotals],
+    [data.players, leaderboardTotals],
   );
   const totalInPlay = data.matches.reduce((sum, match) => {
     const matchPayers = match.winnerIds.reduce((count, winnerId) => count + (match.receiveFromByWinner[winnerId]?.length || match.loserIds.length), 0);
@@ -590,6 +607,12 @@ function App() {
     await withRoomMutation((room) => confirmSettlementReceived(room.slug, room.passwordHash, adminHash, settlement.id, activePlayerId === settlement.to ? activePlayerId : null));
   }
 
+  async function resetLeaderboardScores() {
+    if (!canManage) return;
+    if (!window.confirm("Reset the leaderboard by removing all confirmed payments? Matches and pending payments stay unchanged.")) return;
+    await withRoomMutation((room) => resetLeaderboard(room.slug, room.passwordHash, adminHash));
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -864,14 +887,18 @@ function App() {
             <div>
               <p className="eyebrow">Leaderboard</p>
               <h2>Who is up and down</h2>
-              <p className="helper-text">Ranked by current net balance after confirmed payments.</p>
+              <p className="helper-text">Ranked only by payments that the receiver or admin confirmed.</p>
             </div>
-            <span className="status balanced">{data.players.length} players</span>
+            {canManage ? (
+              <button className="secondary-button" type="button" onClick={() => void resetLeaderboardScores()}>Reset leaderboard</button>
+            ) : (
+              <span className="status balanced">{data.players.length} players</span>
+            )}
           </div>
 
           <div className="leaderboard-list">
             {leaderboard.length === 0 ? (
-              <div className="empty-state">Add players and matches to build the leaderboard.</div>
+              <div className="empty-state">Confirm payments to build the leaderboard.</div>
             ) : (
               leaderboard.map((entry, index) => (
                 <article className={entry.net >= 0 ? "leaderboard-row positive-row" : "leaderboard-row negative-row"} key={entry.player.id}>
